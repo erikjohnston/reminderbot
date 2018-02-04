@@ -1,10 +1,12 @@
 #![feature(conservative_impl_trait)]
 
+extern crate chrono;
 #[macro_use]
 extern crate failure;
 extern crate futures;
 extern crate hyper;
 extern crate hyper_tls;
+extern crate regex;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
@@ -28,6 +30,7 @@ use twilio_rust::messages::{MessageFrom, Messages, OutboundMessageBuilder};
 use std::fs::File;
 use std::io::Read;
 
+mod date;
 mod matrix;
 
 #[derive(Debug, Clone, Deserialize)]
