@@ -26,6 +26,7 @@ use hyper_tls::HttpsConnector;
 use futures::{Future, Stream};
 use slog::Drain;
 use twilio_rust::messages::{MessageFrom, Messages, OutboundMessageBuilder};
+use regex::Regex;
 
 use std::fs::File;
 use std::io::Read;
@@ -159,35 +160,59 @@ impl EventHandler {
             return Box::new(futures::future::ok(()));
         };
 
-        if !body.starts_with("!test") {
+        if !body.starts_with("testbot:") {
             return Box::new(futures::future::ok(()));
         }
 
-        info!(self.logger, "Sending sms");
+        info!(self.logger, "Got message: {:?}...", &body[..20]);
 
-        let messages = Messages::new(&self.client);
+        let reminder_regex = Regex::new(r"^testbot:\s+(.*)\s+to\s+(,*)$").expect("invalid regex");
+        if let Some(capt) = reminder_regex.captures(body) {
+            let at = &capt[1];
+            let text = &capt[2];
 
-        let outbound_sms = OutboundMessageBuilder::new_sms(
-            MessageFrom::From(&self.from_num),
-            &self.to_num,
-            "Hello from Rust!",
-        ).build();
+            let now = chrono::Utc::now();
+            let datetime = match date::parse_human_datetime(at, now) {
+                Ok(date) => date,
+                Err(_) => {
+                    // TODO: Report back error
+                    return Box::new(futures::future::ok(()));
+                }
+            };
 
-        let logger = self.logger.clone();
-
-        let f = messages.send_message(&outbound_sms).then(move |res| {
-            match res {
-                Ok(msg) => if let Some(error) = msg.error_message {
-                    error!(logger, "Error from twilio"; "error" => error);
-                } else {
-                    info!(logger, "Message sent"; "status" => ?msg.status)
-                },
-                Err(err) => error!(logger, "Error sending sms"; "error" => ?err),
+            if datetime < now {
+                // TODO: Report back error
+                return Box::new(futures::future::ok(()));
             }
 
-            Ok(())
-        });
+            // TODO: Queue reminder
+        }
 
-        Box::new(f)
+        return Box::new(futures::future::ok(()));
+
+        // let messages = Messages::new(&self.client);
+
+        // let outbound_sms = OutboundMessageBuilder::new_sms(
+        //     MessageFrom::From(&self.from_num),
+        //     &self.to_num,
+        //     "Hello from Rust!",
+        // ).build();
+
+        // let logger = self.logger.clone();
+
+        // let f = messages.send_message(&outbound_sms).then(move |res| {
+        //     match res {
+        //         Ok(msg) => if let Some(error) = msg.error_message {
+        //             error!(logger, "Error from twilio"; "error" => error);
+        //         } else {
+        //             info!(logger, "Message sent"; "status" => ?msg.status)
+        //         },
+        //         Err(err) => error!(logger, "Error sending sms"; "error" => ?err),
+        //     }
+
+        //     Ok(())
+        // });
+
+        // Box::new(f)
     }
 }

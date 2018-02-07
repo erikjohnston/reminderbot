@@ -98,7 +98,7 @@ where
 
         let url = if let Some(ref nb) = state.borrow().next_batch {
             format!(
-                "{}/_matrix/client/r0/sync?since={}&timeout=5000",
+                "{}/_matrix/client/r0/sync?since={}&timeout=60000",
                 self.base_host, nb
             )
         } else {
