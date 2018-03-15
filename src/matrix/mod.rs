@@ -149,6 +149,8 @@ where
         let state2 = state.clone();
 
         let f = sleep_fut
+            // .select(stop_fut.from_err())
+            // .map_err(|(e, _)| e)
             .and_then(move |_| {
                 trace!(logger, "Making sync request");
                 http_client

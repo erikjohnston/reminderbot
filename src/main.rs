@@ -30,9 +30,13 @@ use regex::Regex;
 
 use std::fs::File;
 use std::io::Read;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 mod date;
 mod matrix;
+mod reminders;
+
 
 #[derive(Debug, Clone, Deserialize)]
 struct Config {
@@ -81,18 +85,64 @@ fn main() {
 
     let timer = tokio_timer::wheel().build();
 
+    let reminders = Arc::new(Mutex::new(reminders::Reminders::new()));
+
     let twilio_client = twilio_rust::Client::new(
         &config.twilio.account_sid,
         &config.twilio.auth_token,
         &core.handle(),
     ).expect("failed to set up twilio client");
 
-    let event_handler = EventHandler {
-        client: twilio_client,
+    let mut event_handler = EventHandler {
         logger: logger.clone(),
         from_num: config.twilio.from_num.clone(),
         to_num: config.twilio.to_num.clone(),
+        reminders: reminders.clone(),
     };
+
+    let from_num = config.twilio.from_num.clone();
+    let to_num = config.twilio.to_num.clone();
+
+    let logger2 = logger.clone();
+    let handle2 = handle.clone();
+
+    let s = timer.interval(Duration::from_millis(200))
+    .for_each(move |_| {
+        let now = chrono::Utc::now();
+        let events = reminders.lock().expect("lock was poisoned")
+            .take_reminders_before(&now);
+
+        for event in events {
+            let messages = Messages::new(&twilio_client);
+
+            let outbound_sms = OutboundMessageBuilder::new_sms(
+                MessageFrom::From(&from_num),
+                &to_num,
+                &event.text,
+            ).build();
+
+            let logger2 = logger2.clone();
+
+            let f = messages.send_message(&outbound_sms).then(move |res| {
+                match res {
+                    Ok(msg) => if let Some(error) = msg.error_message {
+                        error!(logger2, "Error from twilio"; "error" => error);
+                    } else {
+                        info!(logger2, "Message sent"; "status" => ?msg.status)
+                    },
+                    Err(err) => error!(logger2, "Error sending sms"; "error" => ?err),
+                }
+
+                Ok(())
+            });
+
+            handle2.spawn(f);
+        }
+
+        Ok(())
+    }).map_err(|_| ());
+
+    handle.spawn(s);
 
     info!(logger, "Starting");
 
@@ -136,15 +186,16 @@ fn main() {
 }
 
 struct EventHandler {
-    client: twilio_rust::Client,
+    // client: twilio_rust::Client,
     logger: slog::Logger,
     from_num: String,
     to_num: String,
+    reminders: Arc<Mutex<reminders::Reminders>>,
 }
 
 impl EventHandler {
     fn handle_event(
-        &self,
+        &mut self,
         _room_id: &str,
         event: &matrix::types::Event,
     ) -> Box<Future<Item = (), Error = ()>> {
@@ -152,7 +203,8 @@ impl EventHandler {
             return Box::new(futures::future::ok(()));
         }
 
-        let body_opt = event.content.get("body").and_then(|value| value.as_str());
+        let body_opt = event.content.get("body")
+            .and_then(|value| value.as_str());
 
         let body = if let Some(body) = body_opt {
             body
@@ -166,53 +218,41 @@ impl EventHandler {
 
         info!(self.logger, "Got message: {:?}...", &body[..20]);
 
-        let reminder_regex = Regex::new(r"^testbot:\s+(.*)\s+to\s+(,*)$").expect("invalid regex");
+        let reminder_regex = Regex::new(r"^testbot:\s+(.*)\s+to\s+(.*)$").expect("invalid regex");
         if let Some(capt) = reminder_regex.captures(body) {
             let at = &capt[1];
             let text = &capt[2];
 
             let now = chrono::Utc::now();
-            let datetime = match date::parse_human_datetime(at, now) {
+            let due = match date::parse_human_datetime(at, now) {
                 Ok(date) => date,
                 Err(_) => {
                     // TODO: Report back error
+                    info!(self.logger, "Failed to parse date {}", at);
                     return Box::new(futures::future::ok(()));
                 }
-            };
+            };            
 
-            if datetime < now {
+            if due < now {
                 // TODO: Report back error
+                info!(self.logger, "Due date in past: {}", due);                
                 return Box::new(futures::future::ok(()));
             }
 
-            // TODO: Queue reminder
+            info!(self.logger, "Queuing message to be sent at {}", due);
+
+            self.reminders.lock().expect("lock was poisoned")
+                .add_reminder(reminders::Reminder {
+                    due,
+                    text: String::from(text),
+                    owner: event.sender.clone(),
+                });
+
+            // TODO: persist.
+        } else {
+            info!(self.logger, "Unrecognized command");            
         }
 
         return Box::new(futures::future::ok(()));
-
-        // let messages = Messages::new(&self.client);
-
-        // let outbound_sms = OutboundMessageBuilder::new_sms(
-        //     MessageFrom::From(&self.from_num),
-        //     &self.to_num,
-        //     "Hello from Rust!",
-        // ).build();
-
-        // let logger = self.logger.clone();
-
-        // let f = messages.send_message(&outbound_sms).then(move |res| {
-        //     match res {
-        //         Ok(msg) => if let Some(error) = msg.error_message {
-        //             error!(logger, "Error from twilio"; "error" => error);
-        //         } else {
-        //             info!(logger, "Message sent"; "status" => ?msg.status)
-        //         },
-        //         Err(err) => error!(logger, "Error sending sms"; "error" => ?err),
-        //     }
-
-        //     Ok(())
-        // });
-
-        // Box::new(f)
     }
 }

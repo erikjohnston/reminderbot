@@ -1,33 +1,38 @@
-use chrone::{DateTime, Utc};
+use chrono::{DateTime, Utc};
 use tokio_timer::Timer;
 
 use std::mem;
 
 #[derive(Debug, Clone)]
-struct Reminder {
-    due: DateTime<Utc>,
-    text: String,
-    owner: String,
+pub struct Reminder {
+    pub due: DateTime<Utc>,
+    pub text: String,
+    pub owner: String,
 }
 
 #[derive(Debug, Clone, Default)]
-struct Reminders {
+pub struct Reminders {
     reminders: Vec<Reminder>,
 }
 
 impl Reminders {
+    pub fn new() -> Reminders {
+        Reminders {
+            reminders: Vec::new(),
+        }
+    }
     pub fn add_reminder(&mut self, reminder: Reminder) {
         self.reminders.push(reminder);
         self.reminders.sort_by_key(|r| r.due);
     }
 
     pub fn add_reminders<I>(&mut self, reminders: I) where I: IntoIterator<Item=Reminder> {
-        self.reminders.extend(reminders)
+        self.reminders.extend(reminders);
         self.reminders.sort_by_key(|r| r.due);
     }
 
-    pub fn take_reminders_before(&mut self, now: DateTime<Utc>) -> Vec<Reminder> {
-        let before_reminders = mem::replace(&mut self.reminders, Vec::new());
+    pub fn take_reminders_before(&mut self, now: &DateTime<Utc>) -> Vec<Reminder> {
+        let mut before_reminders = mem::replace(&mut self.reminders, Vec::new());
 
         let pos = match before_reminders.binary_search_by_key(now, |r| r.due) {
             Ok(pos) => pos,
@@ -43,7 +48,7 @@ impl Reminders {
         before_reminders
     }
 
-    pub fn get_next_due(&self) -> OptionM<DateTime<Utc>> {
+    pub fn get_next_due(&self) -> Option<DateTime<Utc>> {
         self.reminders.first().map(|r| r.due)
     }
 }
