@@ -20,6 +20,7 @@ extern crate tokio_signal;
 extern crate tokio_timer;
 extern crate toml;
 extern crate twilio_rust;
+extern crate rusqlite;
 
 use hyper::Client;
 use hyper_tls::HttpsConnector;
@@ -59,6 +60,8 @@ struct TwilioConfig {
 }
 
 fn main() {
+    // Set up logging
+
     let decorator = slog_term::TermDecorator::new().build();
     let drain = slog_term::FullFormat::new(decorator).build().fuse();
     let drain = slog_async::Async::new(drain).build().fuse();
@@ -66,6 +69,8 @@ fn main() {
     let logger = slog::Logger::root(drain, o!());
 
     info!(logger, "Initialising");
+
+    // Parse config
 
     let config: Config = {
         let mut f = File::open("config.toml").expect("couldn't find config.toml");
@@ -76,86 +81,33 @@ fn main() {
         toml::from_str(&s).expect("failed to parse config")
     };
 
+    // Set up tokio
+
     let mut core = tokio_core::reactor::Core::new().expect("start tokio core");
-
     let handle = core.handle();
-    let connector = HttpsConnector::new(4, &handle).expect("tls setup");
 
-    let client = Client::configure().connector(connector).build(&handle);
-
-    let timer = tokio_timer::wheel().build();
+    // Set up reminders handling
 
     let reminders = Arc::new(Mutex::new(reminders::Reminders::new()));
 
-    let twilio_client = twilio_rust::Client::new(
-        &config.twilio.account_sid,
-        &config.twilio.auth_token,
-        &core.handle(),
-    ).expect("failed to set up twilio client");
+    spawn_reminder_loop(&config, &logger, &handle, reminders.clone());
 
-    let mut event_handler = EventHandler {
-        logger: logger.clone(),
-        from_num: config.twilio.from_num.clone(),
-        to_num: config.twilio.to_num.clone(),
-        reminders: reminders.clone(),
-    };
+    // Set up matrix::Syncer
 
-    let from_num = config.twilio.from_num.clone();
-    let to_num = config.twilio.to_num.clone();
-
-    let logger2 = logger.clone();
-    let handle2 = handle.clone();
-
-    let s = timer.interval(Duration::from_millis(200))
-    .for_each(move |_| {
-        let now = chrono::Utc::now();
-        let events = reminders.lock().expect("lock was poisoned")
-            .take_reminders_before(&now);
-
-        for event in events {
-            let messages = Messages::new(&twilio_client);
-
-            let outbound_sms = OutboundMessageBuilder::new_sms(
-                MessageFrom::From(&from_num),
-                &to_num,
-                &event.text,
-            ).build();
-
-            let logger2 = logger2.clone();
-
-            let f = messages.send_message(&outbound_sms).then(move |res| {
-                match res {
-                    Ok(msg) => if let Some(error) = msg.error_message {
-                        error!(logger2, "Error from twilio"; "error" => error);
-                    } else {
-                        info!(logger2, "Message sent"; "status" => ?msg.status)
-                    },
-                    Err(err) => error!(logger2, "Error sending sms"; "error" => ?err),
-                }
-
-                Ok(())
-            });
-
-            handle2.spawn(f);
-        }
-
-        Ok(())
-    }).map_err(|_| ());
-
-    handle.spawn(s);
-
-    info!(logger, "Starting");
+    let connector = HttpsConnector::new(4, &handle).expect("tls setup");
+    let http_client = Client::configure().connector(connector).build(&handle);
 
     let syncer = matrix::Syncer::new(
-        client,
+        http_client,
         config.matrix.host.clone(),
         config.matrix.access_token.clone(),
-        timer,
+        tokio_timer::Timer::default(),
         logger.clone(),
     );
 
-    let mut sync_stopper = syncer.stopper();
+    // Set up graceful shutdown
 
+    let mut sync_stopper = syncer.stopper();
     let ctrl_c = tokio_signal::ctrl_c(&handle)
         .flatten_stream()
         .for_each(move |()| {
@@ -164,6 +116,17 @@ fn main() {
         })
         .map_err(|_| ());
     handle.spawn(ctrl_c);
+
+    // Set up main event handling code
+
+    let mut event_handler = EventHandler {
+        logger: logger.clone(),
+        reminders: reminders.clone(),
+    };
+
+    // Actually start syncing from matrix
+
+    info!(logger, "Starting");
 
     core.run(syncer.run().for_each(move |res| {
         match res {
@@ -186,10 +149,7 @@ fn main() {
 }
 
 struct EventHandler {
-    // client: twilio_rust::Client,
     logger: slog::Logger,
-    from_num: String,
-    to_num: String,
     reminders: Arc<Mutex<reminders::Reminders>>,
 }
 
@@ -216,9 +176,9 @@ impl EventHandler {
             return Box::new(futures::future::ok(()));
         }
 
-        info!(self.logger, "Got message: {:?}...", &body[..20]);
+        info!(self.logger, "Got message: {}...", &body[..20]);
 
-        let reminder_regex = Regex::new(r"^testbot:\s+(.*)\s+to\s+(.*)$").expect("invalid regex");
+        let reminder_regex = Regex::new(r"^\s+testbot:\s+remindme\s+(.*)\s+to\s+(.*)$").expect("invalid regex");
         if let Some(capt) = reminder_regex.captures(body) {
             let at = &capt[1];
             let text = &capt[2];
@@ -255,4 +215,62 @@ impl EventHandler {
 
         return Box::new(futures::future::ok(()));
     }
+}
+
+
+fn spawn_reminder_loop(
+    config: &Config,
+    logger: &slog::Logger,
+    handle: &tokio_core::reactor::Handle,
+    reminders: Arc<Mutex<reminders::Reminders>>,
+) {
+    let twilio_client = twilio_rust::Client::new(
+        &config.twilio.account_sid,
+        &config.twilio.auth_token,
+        handle,
+    ).expect("failed to set up twilio client");
+
+    let from_num = config.twilio.from_num.clone();
+    let to_num = config.twilio.to_num.clone();
+
+    let logger = logger.clone();
+    let handle2 = handle.clone();
+
+    let s = tokio_timer::Timer::default().interval(Duration::from_millis(200))
+    .for_each(move |_| {
+        let now = chrono::Utc::now();
+        let events = reminders.lock().expect("lock was poisoned")
+            .take_reminders_before(&now);
+
+        for event in events {
+            let messages = Messages::new(&twilio_client);
+
+            let outbound_sms = OutboundMessageBuilder::new_sms(
+                MessageFrom::From(&from_num),
+                &to_num,
+                &event.text,
+            ).build();
+
+            let logger = logger.clone();
+
+            let f = messages.send_message(&outbound_sms).then(move |res| {
+                match res {
+                    Ok(msg) => if let Some(error) = msg.error_message {
+                        error!(logger, "Error from twilio"; "error" => error);
+                    } else {
+                        info!(logger, "Message sent"; "status" => ?msg.status)
+                    },
+                    Err(err) => error!(logger, "Error sending sms"; "error" => ?err),
+                }
+
+                Ok(())
+            });
+
+            handle2.spawn(f);
+        }
+
+        Ok(())
+    }).map_err(|_| ());
+
+    handle.spawn(s);
 }

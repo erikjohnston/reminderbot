@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use tokio_timer::Timer;
 
 use std::mem;
 
@@ -26,11 +25,6 @@ impl Reminders {
         self.reminders.sort_by_key(|r| r.due);
     }
 
-    pub fn add_reminders<I>(&mut self, reminders: I) where I: IntoIterator<Item=Reminder> {
-        self.reminders.extend(reminders);
-        self.reminders.sort_by_key(|r| r.due);
-    }
-
     pub fn take_reminders_before(&mut self, now: &DateTime<Utc>) -> Vec<Reminder> {
         let mut before_reminders = mem::replace(&mut self.reminders, Vec::new());
 
@@ -46,9 +40,5 @@ impl Reminders {
         self.reminders = after_reminders;
 
         before_reminders
-    }
-
-    pub fn get_next_due(&self) -> Option<DateTime<Utc>> {
-        self.reminders.first().map(|r| r.due)
     }
 }
