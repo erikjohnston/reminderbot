@@ -26,10 +26,14 @@ pub fn parse_human_datetime(input: &str, now: DateTime<Utc>) -> Result<DateTime<
     } else if let Some(date) = parse_on_date_clause(&input, now)? {
         date
     } else {
-        bail!("couldn't parse duration")
+        now
     };
 
     date = parse_at_clause(&input, now, date)?;
+
+    if date == now {
+        bail!("couldn't parse duration");
+    }
 
     return Ok(date);
 }
@@ -220,6 +224,11 @@ fn date_parse_test() {
     use chrono::TimeZone;
 
     let dt = Utc.ymd(2014, 7, 8).and_hms(9, 10, 11);
+
+    assert_eq!(
+        parse_human_datetime("at 1800", dt).unwrap(),
+        Utc.ymd(2014, 7, 8).and_hms(18, 00, 0)
+    );
 
     assert_eq!(
         parse_human_datetime("tomorrow", dt).unwrap(),

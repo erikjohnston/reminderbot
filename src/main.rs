@@ -178,7 +178,7 @@ impl EventHandler {
 
         info!(self.logger, "Got message: {}...", &body[..20]);
 
-        let reminder_regex = Regex::new(r"^\s+testbot:\s+remindme\s+(.*)\s+to\s+(.*)$").expect("invalid regex");
+        let reminder_regex = Regex::new(r"^testbot:\s+remind\s*me\s+(.*)\s+to\s+(.*)$").expect("invalid regex");
         if let Some(capt) = reminder_regex.captures(body) {
             let at = &capt[1];
             let text = &capt[2];
@@ -199,7 +199,7 @@ impl EventHandler {
                 return Box::new(futures::future::ok(()));
             }
 
-            info!(self.logger, "Queuing message to be sent at {}", due);
+            info!(self.logger, "Queuing message to be sent at '{}'", due);
 
             self.reminders.lock().expect("lock was poisoned")
                 .add_reminder(reminders::Reminder {
