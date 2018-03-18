@@ -28,7 +28,6 @@ use hyper_tls::HttpsConnector;
 use futures::{Future, Stream};
 use slog::Drain;
 use twilio_rust::messages::{MessageFrom, Messages, OutboundMessageBuilder};
-use regex::Regex;
 
 use std::fs::File;
 use std::io::Read;
@@ -36,9 +35,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 mod date;
+mod event_handler;
 mod matrix;
 mod reminders;
 mod futures_flag;
+
+use event_handler::EventHandler;
 
 #[derive(Debug, Clone, Deserialize)]
 struct Config {
@@ -114,10 +116,7 @@ fn main() {
 
     // Set up main event handling code
 
-    let event_handler = EventHandler {
-        logger: logger.clone(),
-        reminders: reminders.clone(),
-    };
+    let event_handler = EventHandler::new(logger.clone(), reminders.clone());
 
     // Actually start syncing from matrix
 
@@ -125,102 +124,6 @@ fn main() {
 
     core.run(event_handler.start_from_sync(handle, syncer))
         .expect("sync stream failed");
-}
-
-struct EventHandler {
-    logger: slog::Logger,
-    reminders: Arc<Mutex<reminders::Reminders>>,
-}
-
-impl EventHandler {
-    fn start_from_sync(
-        mut self,
-        handle: tokio_core::reactor::Handle,
-        syncer: matrix::Syncer,
-    ) -> impl Future<Item = (), Error = ()> {
-        syncer.run().for_each(move |res| {
-            match res {
-                Ok(resp) => {
-                    if resp.is_live {
-                        for (room_id, event) in resp.sync_response.events() {
-                            info!(self.logger, "Got event";
-                                "room" => room_id,
-                                "sender" => &event.sender,
-                            );
-                            handle.spawn(self.handle_event(room_id, event))
-                        }
-                    }
-                }
-                Err(err) => error!(self.logger, "Error"; "err" => %err),
-            }
-
-            Ok(())
-        })
-    }
-
-    fn handle_event(
-        &mut self,
-        _room_id: &str,
-        event: &matrix::types::Event,
-    ) -> Box<Future<Item = (), Error = ()>> {
-        if event.etype != "m.room.message" {
-            return Box::new(futures::future::ok(()));
-        }
-
-        let body_opt = event.content.get("body").and_then(|value| value.as_str());
-
-        let body = if let Some(body) = body_opt {
-            body
-        } else {
-            return Box::new(futures::future::ok(()));
-        };
-
-        if !body.starts_with("testbot:") {
-            return Box::new(futures::future::ok(()));
-        }
-
-        info!(self.logger, "Got message: {}...", &body[..20]);
-
-        let reminder_regex =
-            Regex::new(r"^testbot:\s+remind\s*me\s+(.*)\s+to\s+(.*)$").expect("invalid regex");
-        if let Some(capt) = reminder_regex.captures(body) {
-            let at = &capt[1];
-            let text = &capt[2];
-
-            let now = chrono::Utc::now();
-            let due = match date::parse_human_datetime(at, now) {
-                Ok(date) => date,
-                Err(_) => {
-                    // TODO: Report back error
-                    info!(self.logger, "Failed to parse date {}", at);
-                    return Box::new(futures::future::ok(()));
-                }
-            };
-
-            if due < now {
-                // TODO: Report back error
-                info!(self.logger, "Due date in past: {}", due);
-                return Box::new(futures::future::ok(()));
-            }
-
-            info!(self.logger, "Queuing message to be sent at '{}'", due);
-
-            self.reminders
-                .lock()
-                .expect("lock was poisoned")
-                .add_reminder(reminders::Reminder {
-                    due,
-                    text: String::from(text),
-                    owner: event.sender.clone(),
-                });
-
-        // TODO: persist.
-        } else {
-            info!(self.logger, "Unrecognized command");
-        }
-
-        return Box::new(futures::future::ok(()));
-    }
 }
 
 fn setup_logging() -> slog::Logger {
