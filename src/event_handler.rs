@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono;
 use futures::{future, Future, Stream};
+use rand::{thread_rng, Rng, ThreadRng};
 use regex::Regex;
 use reminders::{Reminder, Reminders};
 use slog::Logger;
@@ -14,11 +15,16 @@ use matrix::types::Event;
 pub struct EventHandler {
     logger: Logger,
     reminders: Arc<Mutex<Reminders>>,
+    rng: ThreadRng,
 }
 
 impl EventHandler {
     pub fn new(logger: Logger, reminders: Arc<Mutex<Reminders>>) -> EventHandler {
-        EventHandler { logger, reminders }
+        EventHandler {
+            logger,
+            reminders,
+            rng: thread_rng(),
+        }
     }
 
     pub fn start_from_sync(
@@ -31,10 +37,6 @@ impl EventHandler {
                 Ok(resp) => {
                     if resp.is_live {
                         for (room_id, event) in resp.sync_response.events() {
-                            info!(self.logger, "Got event";
-                                "room" => room_id,
-                                "sender" => &event.sender,
-                            );
                             handle.spawn(self.handle_event(room_id, event))
                         }
                     }
@@ -46,11 +48,16 @@ impl EventHandler {
         })
     }
 
-    fn handle_event(
-        &mut self,
-        _room_id: &str,
-        event: &Event,
-    ) -> Box<Future<Item = (), Error = ()>> {
+    fn handle_event(&mut self, room_id: &str, event: &Event) -> Box<Future<Item = (), Error = ()>> {
+        let id: String = self.rng.gen_ascii_chars().take(20).collect();
+
+        let logger = self.logger.new(o!("id" => id.clone()));
+
+        info!(logger, "Got event";
+            "room" => room_id,
+            "sender" => &event.sender,
+        );
+
         if event.etype != "m.room.message" {
             return Box::new(future::ok(()));
         }
@@ -67,8 +74,6 @@ impl EventHandler {
             return Box::new(future::ok(()));
         }
 
-        info!(self.logger, "Got message: {}...", &body[..20]);
-
         let reminder_regex =
             Regex::new(r"^testbot:\s+remind\s*me\s+(.*)\s+to\s+(.*)$").expect("invalid regex");
         if let Some(capt) = reminder_regex.captures(body) {
@@ -80,33 +85,39 @@ impl EventHandler {
                 Ok(date) => date,
                 Err(_) => {
                     // TODO: Report back error
-                    info!(self.logger, "Failed to parse date {}", at);
+                    info!(logger, "Failed to parse date {}", at);
                     return Box::new(future::ok(()));
                 }
             };
 
             if due < now {
                 // TODO: Report back error
-                info!(self.logger, "Due date in past: {}", due);
+                info!(logger, "Due date in past: {}", due);
                 return Box::new(future::ok(()));
             }
 
-            info!(self.logger, "Queuing message to be sent at '{}'", due);
+            info!(logger, "Queuing message to be sent at '{}'", due);
 
-            self.reminders
+            let res = self.reminders
                 .lock()
                 .expect("lock was poisoned")
-                .add_reminder(Reminder {
+                .add_reminder(&Reminder {
+                    id,
                     due,
                     text: String::from(text),
-                    owner: event.sender.clone(),
+                    destination: event.sender.clone(),
                 });
+
+            if let Err(err) = res {
+                // TODO: Report back error
+                error!(logger, "Failed to handle reminder"; "error" => format!("{}", err));
+            }
 
         // TODO: persist.
         } else {
-            info!(self.logger, "Unrecognized command");
+            info!(logger, "Unrecognized command");
         }
 
-        return Box::new(future::ok(()));
+        Box::new(future::ok(()))
     }
 }

@@ -1,13 +1,13 @@
 use regex::Regex;
 use chrono::{DateTime, Datelike, Duration, Timelike, Utc, Weekday};
-use failure::{Error, ResultExt};
+use failure::{err_msg, Error, ResultExt};
 
 pub fn parse_human_datetime(input: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, Error> {
     let input = input.trim().to_lowercase();
 
     if input == "next week" {
         let days = 7 - now.weekday().number_from_monday() + 1;
-        return Ok(set_to_morning(now + Duration::days(days as i64)));
+        return Ok(set_to_morning(now + Duration::days(i64::from(days))));
     }
 
     if input == "tomorrow" {
@@ -35,24 +35,25 @@ pub fn parse_human_datetime(input: &str, now: DateTime<Utc>) -> Result<DateTime<
         bail!("couldn't parse duration");
     }
 
-    return Ok(date);
+    Ok(date)
 }
 
 fn parse_in_clause(input: &str, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>, Error> {
     let relative_time_regex = Regex::new(
-        r"^in\s*([0-9]+|half an?|a couple of|a few)\s*(s|seconds?|m|minutes?|h|hours?|d|days?|w|weeks?|months?|years?)"
+        r"^in\s*([0-9]+|half an?|an?|a couple of|a few)\s*(s|seconds?|m|minutes?|h|hours?|d|days?|w|weeks?|months?|years?)"
     ).expect("invalid regex");
 
-    if let Some(capt) = relative_time_regex.captures(&input) {
+    if let Some(capt) = relative_time_regex.captures(input) {
         let number: f64 = match &capt[1] {
             "half a" | "half an" => 0.5,
+            "a" | "an" => 1.0,
             "a couple of" => 2.0,
             "a few" => 3.0,
             d => d.parse::<f64>().context("invalid number")?,
         };
         let dtype = &capt[2];
 
-        if number > 10000000.0 {
+        if number > 10_000_000.0 {
             bail!("duration too large");
         }
 
@@ -88,7 +89,7 @@ fn parse_in_clause(input: &str, now: DateTime<Utc>) -> Result<Option<DateTime<Ut
 fn parse_special_words(input: &str, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>, Error> {
     let special_time_regex = Regex::new(r"^(tomorrow|day after tomorrow)").expect("invalid regex");
 
-    if let Some(capt) = special_time_regex.captures(&input) {
+    if let Some(capt) = special_time_regex.captures(input) {
         match &capt[1] {
             "tomorrow" => Ok(Some(now + Duration::days(1))),
             "day after tomorrow" => Ok(Some(now + Duration::days(2))),
@@ -103,13 +104,13 @@ fn parse_on_day_clause(input: &str, now: DateTime<Utc>) -> Result<Option<DateTim
     let on_regex = Regex::new(r"(on\s+)?((mon|tues?|wed|thu?r?s?|fri|sat?|sun?)(day)?)")
         .expect("invalid regex");
 
-    if let Some(capt) = on_regex.captures(&input) {
+    if let Some(capt) = on_regex.captures(input) {
         let weekday: Weekday = capt[2]
             .parse::<Weekday>()
-            .map_err(|_| format_err!("failed to parse day"))?;
+            .map_err(|_| format_err!("failed to parse day {}", &capt[2]))?;
 
-        let mut date = now - Duration::days(now.weekday().num_days_from_monday() as i64);
-        date = date + Duration::days(weekday.num_days_from_monday() as i64);
+        let mut date = now - Duration::days(i64::from(weekday.num_days_from_monday()));
+        date = date + Duration::days(i64::from(weekday.num_days_from_monday()));
 
         if date < now {
             // If we're in the past then we should shoot forward a week
@@ -127,16 +128,19 @@ fn parse_on_day_clause(input: &str, now: DateTime<Utc>) -> Result<Option<DateTim
 fn parse_on_date_clause(input: &str, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>, Error> {
     let full_date_regex = Regex::new(r"(on\s+)?(\d\d\d\d)-(\d\d)-(\d\d)").expect("invalid regex");
 
-    if let Some(capt) = full_date_regex.captures(&input) {
+    if let Some(capt) = full_date_regex.captures(input) {
         let mut year: i32 = capt[2].parse::<i32>().context("failed to parse year")?;
         let mut month: u32 = capt[3].parse::<u32>().context("failed to parse month")?;
         let mut day: u32 = capt[4].parse::<u32>().context("failed to parse day")?;
 
         let mut date = now;
 
-        date = date.with_year(year).ok_or(format_err!("invalid year"))?;
-        date = date.with_month(month).ok_or(format_err!("invalid month"))?;
-        date = date.with_day(day).ok_or(format_err!("invalid day"))?;
+        date = date.with_year(year)
+            .ok_or_else(|| format_err!("invalid year {}", year))?;
+        date = date.with_month(month)
+            .ok_or_else(|| format_err!("invalid month {}", month))?;
+        date = date.with_day(day)
+            .ok_or_else(|| format_err!("invalid day {}", day))?;
 
         date = set_to_morning(date);
 
@@ -155,25 +159,28 @@ fn parse_at_clause(
 
     let at_time_regex = Regex::new(r"at ((\d\d?):?(\d\d))").expect("invalid regex");
 
-    date = if let Some(capt) = at_time_regex.captures(&input) {
+    date = if let Some(capt) = at_time_regex.captures(input) {
         let hours: u32 = capt[2].parse::<u32>().context("invalid hours")?;
         let minutes: u32 = capt[3].parse::<u32>().context("invalid minutes")?;
 
-        date = date.with_hour(hours).ok_or(format_err!("invalid hour"))?;
+        date = date.with_hour(hours)
+            .ok_or_else(|| format_err!("invalid hour {}", hours))?;
         date = date.with_minute(minutes)
-            .ok_or(format_err!("invalid minutes"))?;
-        date = date.with_second(0).ok_or(format_err!("invalid seconds"))?;
+            .ok_or_else(|| format_err!("invalid minutes {}", minutes))?;
+        date = date.with_second(0)
+            .ok_or_else(|| err_msg("invalid seconds"))?;
 
         date
-    } else if let Some(capt) = at_pm_regex.captures(&input) {
+    } else if let Some(capt) = at_pm_regex.captures(input) {
         let hours: u32 = capt[1].parse::<u32>().context("invalid hours")?;
         let am_pm = &capt[2] == "pm";
 
         if am_pm {
             date = date.with_hour(hours + 12)
-                .ok_or(format_err!("invalid hour"))?
+                .ok_or_else(|| format_err!("invalid hour {}", hours))?
         } else {
-            date = date.with_hour(hours).ok_or(format_err!("invalid hour"))?
+            date = date.with_hour(hours)
+                .ok_or_else(|| format_err!("invalid hour {}", hours))?
         }
 
         date
@@ -193,28 +200,26 @@ fn parse_at_clause(
 }
 
 fn set_to_morning(n: DateTime<Utc>) -> DateTime<Utc> {
-    return n.with_hour(9)
+    n.with_hour(9)
         .unwrap()
         .with_minute(30)
         .unwrap()
         .with_second(0)
-        .unwrap();
+        .unwrap()
 }
 
 fn get_duration_from_string(s: &str) -> Duration {
     match s {
-        "s" | "second" | "seconds" => return Duration::seconds(1),
-        "m" | "minute" | "minutes" => return Duration::minutes(1),
-        "h" | "hour" | "hours" => return Duration::hours(1),
-        "d" | "day" | "days" => {
-            return Duration::days(1);
-        }
-        "w" | "week" | "weeks" => return Duration::weeks(1),
+        "s" | "sec" | "second" | "seconds" => Duration::seconds(1),
+        "m" | "minute" | "minutes" => Duration::minutes(1),
+        "h" | "hour" | "hours" => Duration::hours(1),
+        "d" | "day" | "days" => Duration::days(1),
+        "w" | "week" | "weeks" => Duration::weeks(1),
         "month" | "months" => {
             // Hack as its hard to add months.
-            return Duration::days(30);
+            Duration::days(30)
         }
-        "year" | "years" => return Duration::days(365),
+        "year" | "years" => Duration::days(365),
         _ => panic!("unrecognized type"),
     }
 }

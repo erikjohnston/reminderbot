@@ -33,7 +33,7 @@ pub struct Event {
 }
 
 impl SyncResponse {
-    pub fn events<'a>(&'a self) -> impl Iterator<Item = (&'a str, &'a Event)> {
+    pub fn events(&self) -> impl Iterator<Item = (&str, &Event)> {
         self.rooms.join.iter().flat_map(|(room_id, entry)| {
             entry
                 .timeline

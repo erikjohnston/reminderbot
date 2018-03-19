@@ -7,6 +7,7 @@ extern crate futures;
 extern crate hyper;
 extern crate hyper_tls;
 extern crate linear_map;
+extern crate rand;
 extern crate regex;
 extern crate rusqlite;
 extern crate serde;
@@ -26,6 +27,7 @@ extern crate twilio_rust;
 use hyper::Client;
 use hyper_tls::HttpsConnector;
 use futures::{Future, Stream};
+use rusqlite::Connection;
 use slog::Drain;
 use twilio_rust::messages::{MessageFrom, Messages, OutboundMessageBuilder};
 
@@ -41,11 +43,13 @@ mod reminders;
 mod futures_flag;
 
 use event_handler::EventHandler;
+use reminders::Reminders;
 
 #[derive(Debug, Clone, Deserialize)]
 struct Config {
     matrix: MatrixConfig,
     twilio: TwilioConfig,
+    database: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -78,9 +82,15 @@ fn main() {
     let mut core = tokio_core::reactor::Core::new().expect("start tokio core");
     let handle = core.handle();
 
+    // Set up database
+
+    let database = Connection::open(&config.database).expect("failed to open datbase");
+
     // Set up reminders handling
 
-    let reminders = Arc::new(Mutex::new(reminders::Reminders::new()));
+    let reminders = Arc::new(Mutex::new(
+        Reminders::with_connection(database).expect("failed to open reminders"),
+    ));
 
     let reminder_loop =
         spawn_reminder_loop(&config, logger.clone(), handle.clone(), reminders.clone());
@@ -165,9 +175,14 @@ fn spawn_reminder_loop(
             let events = reminders
                 .lock()
                 .expect("lock was poisoned")
-                .take_reminders_before(&now);
+                .get_reminders_before(&now)
+                .expect("failed to get reminders from database");
 
             for event in events {
+                let logger = logger.new(o!("id" => event.id.clone()));
+
+                info!(logger, "Sending message");
+
                 let messages = Messages::new(&twilio_client);
 
                 let outbound_sms = OutboundMessageBuilder::new_sms(
@@ -175,8 +190,6 @@ fn spawn_reminder_loop(
                     &to_num,
                     &event.text,
                 ).build();
-
-                let logger = logger.clone();
 
                 let f = messages.send_message(&outbound_sms).then(move |res| {
                     match res {
@@ -192,6 +205,12 @@ fn spawn_reminder_loop(
                 });
 
                 handle.spawn(f);
+
+                reminders
+                    .lock()
+                    .expect("lock was poisoned")
+                    .delete_reminder(&event.id)
+                    .expect("failed to delete from database");
             }
 
             Ok(())

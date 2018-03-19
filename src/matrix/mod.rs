@@ -167,9 +167,9 @@ impl Syncer {
         let logger = self.logger.clone();
 
         let stream = stream::repeat(())
-            .and_then(move |_| self.do_sync().then(|res| Ok(res)))
-            .take_while(move |res| match res {
-                &Err(ref error) => match error.downcast_ref::<StopError>() {
+            .and_then(move |_| self.do_sync().then(Ok))
+            .take_while(move |res| match *res {
+                Err(ref error) => match error.downcast_ref::<StopError>() {
                     Some(_) => {
                         info!(logger, "Stopping sync stream");
                         Ok(false)
