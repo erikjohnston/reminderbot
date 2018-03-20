@@ -29,8 +29,6 @@ use hyper_tls::HttpsConnector;
 use futures::{Future, Stream};
 use rusqlite::Connection;
 use slog::Drain;
-use twilio_rust::messages::{MessageFrom, Messages, OutboundMessageBuilder};
-
 use std::fs::File;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -39,14 +37,16 @@ use std::time::Duration;
 mod date;
 mod event_handler;
 mod matrix;
+mod reminder_handler;
 mod reminders;
 mod futures_flag;
 
 use event_handler::EventHandler;
 use reminders::Reminders;
+use reminder_handler::ReminderHandler;
 
 #[derive(Debug, Clone, Deserialize)]
-struct Config {
+pub struct Config {
     matrix: MatrixConfig,
     twilio: TwilioConfig,
     database: String,
@@ -92,8 +92,20 @@ fn main() {
         Reminders::with_connection(database).expect("failed to open reminders"),
     ));
 
-    let reminder_loop =
-        spawn_reminder_loop(&config, logger.clone(), handle.clone(), reminders.clone());
+    let twilio_client = twilio_rust::Client::new(
+        &config.twilio.account_sid,
+        &config.twilio.auth_token,
+        &handle,
+    ).expect("failed to set up twilio client");
+
+    let reminder_handler = ReminderHandler::new(
+        logger.clone(),
+        twilio_client,
+        config.clone(),
+        reminders.clone(),
+    );
+
+    let reminder_loop = spawn_reminder_loop(handle.clone(), reminder_handler);
     handle.spawn(reminder_loop);
 
     // Set up matrix::Syncer
@@ -154,64 +166,13 @@ fn parse_config() -> Config {
 }
 
 fn spawn_reminder_loop(
-    config: &Config,
-    logger: slog::Logger,
     handle: tokio_core::reactor::Handle,
-    reminders: Arc<Mutex<reminders::Reminders>>,
+    handler: ReminderHandler,
 ) -> impl Future<Item = (), Error = ()> {
-    let twilio_client = twilio_rust::Client::new(
-        &config.twilio.account_sid,
-        &config.twilio.auth_token,
-        &handle,
-    ).expect("failed to set up twilio client");
-
-    let from_num = config.twilio.from_num.clone();
-    let to_num = config.twilio.to_num.clone();
-
     tokio_timer::Timer::default()
         .interval(Duration::from_millis(200))
         .for_each(move |_| {
-            let now = chrono::Utc::now();
-            let events = reminders
-                .lock()
-                .expect("lock was poisoned")
-                .get_reminders_before(&now)
-                .expect("failed to get reminders from database");
-
-            for event in events {
-                let logger = logger.new(o!("id" => event.id.clone()));
-
-                info!(logger, "Sending message");
-
-                let messages = Messages::new(&twilio_client);
-
-                let outbound_sms = OutboundMessageBuilder::new_sms(
-                    MessageFrom::From(&from_num),
-                    &to_num,
-                    &event.text,
-                ).build();
-
-                let f = messages.send_message(&outbound_sms).then(move |res| {
-                    match res {
-                        Ok(msg) => if let Some(error) = msg.error_message {
-                            error!(logger, "Error from twilio"; "error" => error);
-                        } else {
-                            info!(logger, "Message sent"; "status" => ?msg.status)
-                        },
-                        Err(err) => error!(logger, "Error sending sms"; "error" => ?err),
-                    }
-
-                    Ok(())
-                });
-
-                handle.spawn(f);
-
-                reminders
-                    .lock()
-                    .expect("lock was poisoned")
-                    .delete_reminder(&event.id)
-                    .expect("failed to delete from database");
-            }
+            handler.do_reminders(&handle);
 
             Ok(())
         })
