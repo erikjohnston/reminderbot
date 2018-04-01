@@ -1,13 +1,13 @@
+use failure::{Error, ResultExt};
+use futures::{future, stream, Future, Stream};
 use hyper;
 use serde_json;
-use futures::{future, stream, Future, Stream};
-use failure::{Error, ResultExt};
 use slog::Logger;
 use tokio_timer::Timer;
 
-use std::time::Duration;
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
 
 use futures_flag::{Flag, FutureExt};
 

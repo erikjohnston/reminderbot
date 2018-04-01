@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use chrono::{DateTime, TimeZone, Utc};
 use failure::{Error, ResultExt};
 use rusqlite::Connection;
@@ -10,19 +12,20 @@ pub struct Reminder {
     pub text: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Reminders {
-    conn: Connection,
+    conn: Arc<Connection>,
 }
 
 impl Reminders {
-    pub fn with_connection(conn: Connection) -> Result<Reminders, Error> {
+    pub fn with_connection(conn: Arc<Connection>) -> Result<Reminders, Error> {
         conn.execute_batch(REMINDERS_SCHEMA)
             .context("failed to create reminders schema")?;
 
         Ok(Reminders { conn })
     }
-    pub fn add_reminder(&mut self, reminder: &Reminder) -> Result<(), Error> {
+
+    pub fn add_reminder(&self, reminder: &Reminder) -> Result<(), Error> {
         self.conn
             .prepare_cached(
                 "INSERT INTO reminders (id, due_ts, destination, text, sent) VALUES (?,?,?,?,?)",
@@ -40,7 +43,7 @@ impl Reminders {
         Ok(())
     }
 
-    pub fn get_reminders_before(&mut self, now: &DateTime<Utc>) -> Result<Vec<Reminder>, Error> {
+    pub fn get_reminders_before(&self, now: &DateTime<Utc>) -> Result<Vec<Reminder>, Error> {
         let mut stmt = self.conn
             .prepare_cached("SELECT id, due_ts, destination, text FROM reminders WHERE due_ts <= ? AND NOT sent")
             .context("failed to create select statement")?;
@@ -57,7 +60,7 @@ impl Reminders {
         Ok(vec)
     }
 
-    pub fn delete_reminder(&mut self, id: &str) -> Result<(), Error> {
+    pub fn delete_reminder(&self, id: &str) -> Result<(), Error> {
         self.conn
             .prepare_cached("UPDATE reminders SET sent = ? WHERE id = ?")
             .context("failed to create delete statement")?

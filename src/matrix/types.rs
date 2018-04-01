@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use serde_json;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct SyncResponse {

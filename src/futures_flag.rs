@@ -1,5 +1,5 @@
-use futures::{Async, Future, Poll};
 use futures::task::{self, Task};
+use futures::{Async, Future, Poll};
 use linear_map::LinearMap;
 
 use std::sync::{Arc, Mutex};

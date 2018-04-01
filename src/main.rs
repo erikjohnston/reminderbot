@@ -24,25 +24,25 @@ extern crate tokio_timer;
 extern crate toml;
 extern crate twilio_rust;
 
+use futures::{Future, Stream};
 use hyper::Client;
 use hyper_tls::HttpsConnector;
-use futures::{Future, Stream};
 use rusqlite::Connection;
 use slog::Drain;
 use std::fs::File;
 use std::io::Read;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 mod date;
+mod db;
 mod event_handler;
+mod futures_flag;
 mod matrix;
 mod reminder_handler;
-mod reminders;
-mod futures_flag;
 
+use db::{AddressBook, Reminders};
 use event_handler::EventHandler;
-use reminders::Reminders;
 use reminder_handler::ReminderHandler;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -63,7 +63,7 @@ struct TwilioConfig {
     account_sid: String,
     auth_token: String,
     from_num: String,
-    to_num: String,
+    // to_num: String,
 }
 
 fn main() {
@@ -84,13 +84,13 @@ fn main() {
 
     // Set up database
 
-    let database = Connection::open(&config.database).expect("failed to open datbase");
+    let database = Arc::new(Connection::open(&config.database).expect("failed to open datbase"));
 
     // Set up reminders handling
 
-    let reminders = Arc::new(Mutex::new(
-        Reminders::with_connection(database).expect("failed to open reminders"),
-    ));
+    let reminders = Reminders::with_connection(database.clone()).expect("failed to open reminders");
+
+    let address_book = AddressBook::with_connection(database).expect("failed to open address book");
 
     let twilio_client = twilio_rust::Client::new(
         &config.twilio.account_sid,
@@ -103,6 +103,7 @@ fn main() {
         twilio_client,
         config.clone(),
         reminders.clone(),
+        address_book,
     );
 
     let reminder_loop = spawn_reminder_loop(handle.clone(), reminder_handler);

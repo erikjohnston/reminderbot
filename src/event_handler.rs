@@ -1,10 +1,8 @@
-use std::sync::{Arc, Mutex};
-
 use chrono;
+use db::{Reminder, Reminders};
 use futures::{future, Future, Stream};
 use rand::{thread_rng, Rng, ThreadRng};
 use regex::Regex;
-use reminders::{Reminder, Reminders};
 use slog::Logger;
 use tokio_core::reactor::Handle;
 
@@ -14,12 +12,12 @@ use matrix::types::Event;
 
 pub struct EventHandler {
     logger: Logger,
-    reminders: Arc<Mutex<Reminders>>,
+    reminders: Reminders,
     rng: ThreadRng,
 }
 
 impl EventHandler {
-    pub fn new(logger: Logger, reminders: Arc<Mutex<Reminders>>) -> EventHandler {
+    pub fn new(logger: Logger, reminders: Reminders) -> EventHandler {
         EventHandler {
             logger,
             reminders,
@@ -98,15 +96,12 @@ impl EventHandler {
 
             info!(logger, "Queuing message to be sent at '{}'", due);
 
-            let res = self.reminders
-                .lock()
-                .expect("lock was poisoned")
-                .add_reminder(&Reminder {
-                    id,
-                    due,
-                    text: String::from(text),
-                    destination: event.sender.clone(),
-                });
+            let res = self.reminders.add_reminder(&Reminder {
+                id,
+                due,
+                text: String::from(text),
+                destination: event.sender.clone(),
+            });
 
             if let Err(err) = res {
                 // TODO: Report back error

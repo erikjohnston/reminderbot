@@ -1,20 +1,21 @@
-use std::sync::{Arc, Mutex};
-
 use chrono::Utc;
-use futures::Future;
-use reminders::{Reminder, Reminders};
+use db::{Reminder, Reminders};
+use failure::ResultExt;
+use futures::{future, Future};
 use slog::Logger;
 use tokio_core::reactor::Handle;
 use twilio_rust::Client;
 use twilio_rust::messages::{MessageFrom, Messages, OutboundMessageBuilder};
 
 use Config;
+use db::AddressBook;
 
 pub struct ReminderHandler {
     logger: Logger,
     client: Client,
     config: Config,
-    reminders: Arc<Mutex<Reminders>>,
+    reminders: Reminders,
+    address_book: AddressBook,
 }
 
 impl ReminderHandler {
@@ -22,13 +23,15 @@ impl ReminderHandler {
         logger: Logger,
         client: Client,
         config: Config,
-        reminders: Arc<Mutex<Reminders>>,
+        reminders: Reminders,
+        address_book: AddressBook,
     ) -> ReminderHandler {
         ReminderHandler {
             logger,
             client,
             config,
             reminders,
+            address_book,
         }
     }
 
@@ -36,27 +39,45 @@ impl ReminderHandler {
         let now = Utc::now();
 
         let reminders = self.reminders
-            .lock()
-            .expect("lock was poisoned")
             .get_reminders_before(&now)
             .expect("failed to get reminders from database");
 
         for reminder in reminders {
             let f = self.handle_reminder(&reminder);
             handle.spawn(f);
+
+            self.reminders
+                .delete_reminder(&reminder.id)
+                .expect("failed to delete from database");
         }
     }
 
-    fn handle_reminder(&self, reminder: &Reminder) -> impl Future<Item = (), Error = ()> {
+    fn handle_reminder(&self, reminder: &Reminder) -> Box<Future<Item = (), Error = ()>> {
         let logger = self.logger.new(o!("id" => reminder.id.clone()));
 
         info!(logger, "Sending message");
+
+        let msisdn_res = self.address_book
+            .get_msisdn_for_user(&reminder.destination)
+            .context("failed to get msisdn from DB");
+
+        let msisdn = match msisdn_res {
+            Ok(Some(msisdn)) => msisdn,
+            Ok(None) => {
+                warn!(logger, "Failed to find msisdn"; "destination" => reminder.destination.clone());
+                return Box::new(future::ok(()));
+            }
+            Err(err) => {
+                error!(logger, "Failed to get msisdn"; "destination" => reminder.destination.clone(), "err" => %err);
+                return Box::new(future::ok(()));
+            }
+        };
 
         let messages = Messages::new(&self.client);
 
         let outbound_sms = OutboundMessageBuilder::new_sms(
             MessageFrom::From(&self.config.twilio.from_num),
-            &self.config.twilio.to_num,
+            &msisdn,
             &reminder.text,
         ).build();
 
@@ -73,12 +94,6 @@ impl ReminderHandler {
             Ok(())
         });
 
-        self.reminders
-            .lock()
-            .expect("lock was poisoned")
-            .delete_reminder(&reminder.id)
-            .expect("failed to delete from database");
-
-        f
+        Box::new(f)
     }
 }

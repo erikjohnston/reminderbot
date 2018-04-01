@@ -1,6 +1,6 @@
-use regex::Regex;
 use chrono::{DateTime, Datelike, Duration, Timelike, Utc, Weekday};
 use failure::{err_msg, Error, ResultExt};
+use regex::Regex;
 
 pub fn parse_human_datetime(input: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, Error> {
     let input = input.trim().to_lowercase();
