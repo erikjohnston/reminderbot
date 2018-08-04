@@ -1,14 +1,16 @@
 use chrono;
 use db::{Reminder, Reminders};
 use futures::{future, Future, Stream};
+use hyper::client::connect::Connect;
+use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng, ThreadRng};
 use regex::Regex;
 use slog::Logger;
 use tokio_core::reactor::Handle;
 
 use date::parse_human_datetime;
-use matrix::Syncer;
 use matrix::types::Event;
+use matrix::Syncer;
 
 pub struct EventHandler {
     logger: Logger,
@@ -25,10 +27,10 @@ impl EventHandler {
         }
     }
 
-    pub fn start_from_sync(
+    pub fn start_from_sync<C: Connect + 'static>(
         mut self,
         handle: Handle,
-        syncer: Syncer,
+        syncer: Syncer<C>,
     ) -> impl Future<Item = (), Error = ()> {
         syncer.run().for_each(move |res| {
             match res {
@@ -47,7 +49,7 @@ impl EventHandler {
     }
 
     fn handle_event(&mut self, room_id: &str, event: &Event) -> Box<Future<Item = (), Error = ()>> {
-        let id: String = self.rng.gen_ascii_chars().take(20).collect();
+        let id: String = self.rng.sample_iter(&Alphanumeric).take(20).collect();
 
         let logger = self.logger.new(o!("id" => id.clone()));
 

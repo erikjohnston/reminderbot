@@ -24,7 +24,8 @@ impl AddressBook {
     }
 
     pub fn get_msisdn_for_user(&self, user_id: &str) -> Result<Option<String>, Error> {
-        let mut stmt = self.conn
+        let mut stmt = self
+            .conn
             .prepare_cached("SELECT msisdn FROM address_book WHERE user_id = ?")
             .context("failed to create select statement")?;
 

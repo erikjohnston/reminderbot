@@ -1,5 +1,3 @@
-#![feature(conservative_impl_trait)]
-
 extern crate chrono;
 #[macro_use]
 extern crate failure;
@@ -111,8 +109,8 @@ fn main() {
 
     // Set up matrix::Syncer
 
-    let connector = HttpsConnector::new(4, &handle).expect("tls setup");
-    let http_client = Client::configure().connector(connector).build(&handle);
+    let connector = HttpsConnector::new(4).expect("tls setup");
+    let http_client = Client::builder().build(connector);
 
     let mut stop_flag = futures_flag::Flag::new();
 
@@ -120,21 +118,19 @@ fn main() {
         http_client,
         config.matrix.host.clone(),
         config.matrix.access_token.clone(),
-        tokio_timer::Timer::default(),
         logger.clone(),
         stop_flag.clone(),
     );
 
     // Set up graceful shutdown
 
-    let ctrl_c = tokio_signal::ctrl_c(&handle)
+    let ctrl_c = tokio_signal::ctrl_c()
         .flatten_stream()
         .for_each(move |()| {
             // We got a SIGINT, lets stop things gracefully.
             stop_flag.set();
             Ok(())
-        })
-        .map_err(|_| ());
+        }).map_err(|_| ());
     handle.spawn(ctrl_c);
 
     // Set up main event handling code
@@ -170,12 +166,10 @@ fn spawn_reminder_loop(
     handle: tokio_core::reactor::Handle,
     handler: ReminderHandler,
 ) -> impl Future<Item = (), Error = ()> {
-    tokio_timer::Timer::default()
-        .interval(Duration::from_millis(200))
+    tokio_timer::Interval::new(std::time::Instant::now(), Duration::from_millis(500))
         .for_each(move |_| {
             handler.do_reminders(&handle);
 
             Ok(())
-        })
-        .map_err(|_| ())
+        }).map_err(|_| ())
 }

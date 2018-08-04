@@ -29,16 +29,14 @@ impl Reminders {
         self.conn
             .prepare_cached(
                 "INSERT INTO reminders (id, due_ts, destination, text, sent) VALUES (?,?,?,?,?)",
-            )
-            .context("failed to create insert statement")?
+            ).context("failed to create insert statement")?
             .execute(&[
                 &reminder.id,
                 &reminder.due.timestamp(),
                 &reminder.destination,
                 &reminder.text,
                 &false,
-            ])
-            .context("failed to insert query")?;
+            ]).context("failed to insert query")?;
 
         Ok(())
     }
@@ -48,12 +46,13 @@ impl Reminders {
             .prepare_cached("SELECT id, due_ts, destination, text FROM reminders WHERE due_ts <= ? AND NOT sent")
             .context("failed to create select statement")?;
 
-        let vec = stmt.query_map(&[&now.timestamp()], |row| Reminder {
-            id: row.get(0),
-            due: Utc.timestamp(row.get(1), 0),
-            destination: row.get(2),
-            text: row.get(3),
-        }).context("failed to execute select query")?
+        let vec = stmt
+            .query_map(&[&now.timestamp()], |row| Reminder {
+                id: row.get(0),
+                due: Utc.timestamp(row.get(1), 0),
+                destination: row.get(2),
+                text: row.get(3),
+            }).context("failed to execute select query")?
             .collect::<Result<_, _>>()
             .context("failed to read results of query")?;
 

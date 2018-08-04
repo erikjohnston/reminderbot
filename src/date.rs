@@ -135,11 +135,14 @@ fn parse_on_date_clause(input: &str, now: DateTime<Utc>) -> Result<Option<DateTi
 
         let mut date = now;
 
-        date = date.with_year(year)
+        date = date
+            .with_year(year)
             .ok_or_else(|| format_err!("invalid year {}", year))?;
-        date = date.with_month(month)
+        date = date
+            .with_month(month)
             .ok_or_else(|| format_err!("invalid month {}", month))?;
-        date = date.with_day(day)
+        date = date
+            .with_day(day)
             .ok_or_else(|| format_err!("invalid day {}", day))?;
 
         date = set_to_morning(date);
@@ -163,11 +166,14 @@ fn parse_at_clause(
         let hours: u32 = capt[2].parse::<u32>().context("invalid hours")?;
         let minutes: u32 = capt[3].parse::<u32>().context("invalid minutes")?;
 
-        date = date.with_hour(hours)
+        date = date
+            .with_hour(hours)
             .ok_or_else(|| format_err!("invalid hour {}", hours))?;
-        date = date.with_minute(minutes)
+        date = date
+            .with_minute(minutes)
             .ok_or_else(|| format_err!("invalid minutes {}", minutes))?;
-        date = date.with_second(0)
+        date = date
+            .with_second(0)
             .ok_or_else(|| err_msg("invalid seconds"))?;
 
         date
@@ -176,10 +182,12 @@ fn parse_at_clause(
         let am_pm = &capt[2] == "pm";
 
         if am_pm {
-            date = date.with_hour(hours + 12)
+            date = date
+                .with_hour(hours + 12)
                 .ok_or_else(|| format_err!("invalid hour {}", hours))?
         } else {
-            date = date.with_hour(hours)
+            date = date
+                .with_hour(hours)
                 .ok_or_else(|| format_err!("invalid hour {}", hours))?
         }
 

@@ -1,9 +1,10 @@
 use failure::{Error, ResultExt};
 use futures::{future, stream, Future, Stream};
 use hyper;
+use hyper::client::connect::Connect;
 use serde_json;
 use slog::Logger;
-use tokio_timer::Timer;
+use tokio_timer::sleep;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -14,13 +15,6 @@ use futures_flag::{Flag, FutureExt};
 pub mod types;
 
 use self::types::{SyncResponse, SyncStreamItem};
-
-type ClientService = hyper::server::Service<
-    Request = hyper::client::Request<hyper::Body>,
-    Response = hyper::client::Response,
-    Error = hyper::Error,
-    Future = hyper::client::FutureResponse,
->;
 
 #[derive(Fail, Debug)]
 #[fail(display = "Syncer was stopped")]
@@ -33,37 +27,37 @@ struct SyncState {
     next_batch: Option<String>,
 }
 
-pub struct Syncer {
+pub struct Syncer<C: Connect + 'static> {
     state: Rc<RefCell<SyncState>>,
-    client: Box<ClientService>,
+    client: hyper::Client<C>,
     stop_flag: Flag,
     base_host: String,
     access_token: String,
-    timer: Timer,
     logger: Logger,
 }
 
-impl Syncer {
-    pub fn new<C: hyper::client::Connect>(
+impl<C> Syncer<C>
+where
+    C: Connect + 'static,
+{
+    pub fn new(
         client: hyper::Client<C>,
         base_host: String,
         access_token: String,
-        timer: Timer,
         logger: Logger,
         stop_flag: Flag,
-    ) -> Syncer {
+    ) -> Syncer<C> {
         Syncer {
             state: Rc::default(),
-            client: Box::new(client),
+            client,
             stop_flag,
             base_host,
             access_token,
-            timer,
             logger,
         }
     }
 
-    fn create_request(&self) -> hyper::client::Request<hyper::Body> {
+    fn create_request(&self) -> hyper::Request<hyper::Body> {
         let url = if let Some(ref nb) = self.state.borrow().next_batch {
             format!(
                 "{}/_matrix/client/r0/sync?since={}&timeout=60000",
@@ -75,16 +69,12 @@ impl Syncer {
 
         trace!(self.logger, "Using url: {}", url);
 
-        let url: hyper::Uri = url.parse().expect("valid sync url");
-
-        let mut request = hyper::Request::new(hyper::Method::Get, url);
-        request
-            .headers_mut()
-            .set(hyper::header::Authorization(hyper::header::Bearer {
-                token: self.access_token.clone(),
-            }));
-
-        request
+        hyper::Request::get(url)
+            .header(
+                "Authorization",
+                &format!("Bearer {}", &self.access_token) as &str,
+            ).body(hyper::Body::empty())
+            .expect("valid http request")
     }
 
     fn do_sync(&mut self) -> Box<Future<Item = SyncStreamItem, Error = Error>> {
@@ -93,17 +83,15 @@ impl Syncer {
         // If we've previously errored getting the sync, lets back off
         // a bit
         let sleep_fut = if self.state.borrow().errored {
-            Box::new(
-                self.timer
-                    .sleep(Duration::from_secs(5))
-                    .map_err(Error::from),
-            ) as Box<Future<Item = _, Error = Error>>
+            Box::new(sleep(Duration::from_secs(5)).map_err(Error::from))
+                as Box<Future<Item = _, Error = Error>>
         } else {
             Box::new(future::ok(()))
         };
 
-        let request_future = self.client
-            .call(request)
+        let request_future = self
+            .client
+            .request(request)
             .then(|res| res.context("Failed to make HTTP sync request"))
             .from_err()
             .with_flag(self.stop_flag.clone(), StopError.into());
@@ -118,29 +106,25 @@ impl Syncer {
             .and_then(move |_| {
                 trace!(logger, "Making sync request");
                 request_future
-            })
-            .and_then(|res| {
+            }).and_then(|res| {
                 if res.status().is_success() {
                     Ok(res)
                 } else {
                     Err(format_err!("Got HTTP response: {}", res.status()))
                 }
-            })
-            .and_then(|res| res.body().concat2().from_err())
+            }).and_then(|res| res.into_body().concat2().from_err())
             .and_then(|body: hyper::Chunk| {
                 let body: SyncResponse =
                     serde_json::from_slice(&body).context("Failed to parse sync response")?;
                 Ok(body)
-            })
-            .map(move |sync_response| {
+            }).map(move |sync_response| {
                 let is_live = state2.borrow().is_live;
 
                 SyncStreamItem {
                     sync_response,
                     is_live,
                 }
-            })
-            .then(move |res| {
+            }).then(move |res| {
                 trace!(logger2, "Got Response");
 
                 if let Err(ref err) = res {

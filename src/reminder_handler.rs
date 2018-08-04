@@ -4,11 +4,11 @@ use failure::ResultExt;
 use futures::{future, Future};
 use slog::Logger;
 use tokio_core::reactor::Handle;
-use twilio_rust::Client;
 use twilio_rust::messages::{MessageFrom, Messages, OutboundMessageBuilder};
+use twilio_rust::Client;
 
-use Config;
 use db::AddressBook;
+use Config;
 
 pub struct ReminderHandler {
     logger: Logger,
@@ -38,7 +38,8 @@ impl ReminderHandler {
     pub fn do_reminders(&self, handle: &Handle) {
         let now = Utc::now();
 
-        let reminders = self.reminders
+        let reminders = self
+            .reminders
             .get_reminders_before(&now)
             .expect("failed to get reminders from database");
 
@@ -57,7 +58,8 @@ impl ReminderHandler {
 
         info!(logger, "Sending message");
 
-        let msisdn_res = self.address_book
+        let msisdn_res = self
+            .address_book
             .get_msisdn_for_user(&reminder.destination)
             .context("failed to get msisdn from DB");
 
