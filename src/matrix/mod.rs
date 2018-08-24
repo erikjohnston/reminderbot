@@ -223,13 +223,18 @@ where
             .body(hyper::Body::from(content))
             .expect("valid http request");
 
+        info!(self.logger, "Sending message");
+
         let logger = self.logger.clone();
+        let logger2 = self.logger.clone();
         let fut = self
             .client
             .request(request)
-            .map(|_| ())
+            .map(move |_| {
+                info!(logger, "Sent message");
+            })
             .map_err(move |err| {
-                error!(logger, "Failed to send matrix message"; "error" => %err);
+                error!(logger2, "Failed to send matrix message"; "error" => %err);
             });
 
         Box::new(fut)
