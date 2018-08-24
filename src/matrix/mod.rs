@@ -215,6 +215,9 @@ where
             "{}/_matrix/client/r0/rooms/{}/m.room.message",
             self.base_host, room_id
         );
+
+        info!(self.logger, "Sending message"; "url" => &url);
+
         let request = hyper::Request::post(url)
             .header(
                 "Authorization",
@@ -222,8 +225,6 @@ where
             )
             .body(hyper::Body::from(content))
             .expect("valid http request");
-
-        info!(self.logger, "Sending message");
 
         let logger = self.logger.clone();
         let logger2 = self.logger.clone();
