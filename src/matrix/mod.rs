@@ -209,10 +209,11 @@ where
     fn send_text_message(&self, room_id: &str, msg: &str) -> Box<Future<Item = (), Error = ()>> {
         let content = serde_json::to_vec(&json!({
             "body": msg,
+            "msgtype": "m.text",
         })).expect("valid json");
 
         let url = format!(
-            "{}/_matrix/client/r0/rooms/{}/m.room.message",
+            "{}/_matrix/client/r0/rooms/{}/send/m.room.message",
             self.base_host, room_id
         );
 
