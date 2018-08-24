@@ -11,6 +11,7 @@ extern crate rusqlite;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
+#[macro_use]
 extern crate serde_json;
 #[macro_use]
 extern crate slog;
@@ -115,7 +116,7 @@ fn main() {
     let mut stop_flag = futures_flag::Flag::new();
 
     let syncer = matrix::Syncer::new(
-        http_client,
+        http_client.clone(),
         config.matrix.host.clone(),
         config.matrix.access_token.clone(),
         logger.clone(),
@@ -130,12 +131,23 @@ fn main() {
             // We got a SIGINT, lets stop things gracefully.
             stop_flag.set();
             Ok(())
-        }).map_err(|_| ());
+        })
+        .map_err(|_| ());
     handle.spawn(ctrl_c);
+
+    // Set up matrix message sender
+
+    let message_sender = matrix::MessageSenderHyper::new(
+        http_client,
+        config.matrix.host.clone(),
+        config.matrix.access_token.clone(),
+        logger.clone(),
+    );
 
     // Set up main event handling code
 
-    let event_handler = EventHandler::new(logger.clone(), reminders.clone());
+    let event_handler =
+        EventHandler::new(logger.clone(), reminders.clone(), Box::new(message_sender));
 
     // Actually start syncing from matrix
 
@@ -171,5 +183,6 @@ fn spawn_reminder_loop(
             handler.do_reminders(&handle);
 
             Ok(())
-        }).map_err(|_| ())
+        })
+        .map_err(|_| ())
 }

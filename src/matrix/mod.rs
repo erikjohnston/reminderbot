@@ -73,7 +73,8 @@ where
             .header(
                 "Authorization",
                 &format!("Bearer {}", &self.access_token) as &str,
-            ).body(hyper::Body::empty())
+            )
+            .body(hyper::Body::empty())
             .expect("valid http request")
     }
 
@@ -106,25 +107,29 @@ where
             .and_then(move |_| {
                 trace!(logger, "Making sync request");
                 request_future
-            }).and_then(|res| {
+            })
+            .and_then(|res| {
                 if res.status().is_success() {
                     Ok(res)
                 } else {
                     Err(format_err!("Got HTTP response: {}", res.status()))
                 }
-            }).and_then(|res| res.into_body().concat2().from_err())
+            })
+            .and_then(|res| res.into_body().concat2().from_err())
             .and_then(|body: hyper::Chunk| {
                 let body: SyncResponse =
                     serde_json::from_slice(&body).context("Failed to parse sync response")?;
                 Ok(body)
-            }).map(move |sync_response| {
+            })
+            .map(move |sync_response| {
                 let is_live = state2.borrow().is_live;
 
                 SyncStreamItem {
                     sync_response,
                     is_live,
                 }
-            }).then(move |res| {
+            })
+            .then(move |res| {
                 trace!(logger2, "Got Response");
 
                 if let Err(ref err) = res {
@@ -164,5 +169,69 @@ where
             });
 
         Box::new(stream)
+    }
+}
+
+pub trait MessageSender {
+    fn send_text_message(&self, room_id: &str, msg: &str) -> Box<Future<Item = (), Error = ()>>;
+}
+
+pub struct MessageSenderHyper<C: Connect + 'static> {
+    client: hyper::Client<C>,
+    base_host: String,
+    access_token: String,
+    logger: Logger,
+}
+
+impl<C> MessageSenderHyper<C>
+where
+    C: Connect + 'static,
+{
+    pub fn new(
+        client: hyper::Client<C>,
+        base_host: String,
+        access_token: String,
+        logger: Logger,
+    ) -> MessageSenderHyper<C> {
+        MessageSenderHyper {
+            client,
+            base_host,
+            access_token,
+            logger,
+        }
+    }
+}
+
+impl<C> MessageSender for MessageSenderHyper<C>
+where
+    C: Connect + 'static,
+{
+    fn send_text_message(&self, room_id: &str, msg: &str) -> Box<Future<Item = (), Error = ()>> {
+        let content = serde_json::to_vec(&json!({
+            "body": msg,
+        })).expect("valid json");
+
+        let url = format!(
+            "{}/_matrix/client/r0/rooms/{}/m.room.message",
+            self.base_host, room_id
+        );
+        let request = hyper::Request::post(url)
+            .header(
+                "Authorization",
+                &format!("Bearer {}", &self.access_token) as &str,
+            )
+            .body(hyper::Body::from(content))
+            .expect("valid http request");
+
+        let logger = self.logger.clone();
+        let fut = self
+            .client
+            .request(request)
+            .map(|_| ())
+            .map_err(move |err| {
+                error!(logger, "Failed to send matrix message"; "error" => %err);
+            });
+
+        Box::new(fut)
     }
 }

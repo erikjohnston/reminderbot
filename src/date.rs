@@ -109,9 +109,8 @@ fn parse_on_day_clause(input: &str, now: DateTime<Utc>) -> Result<Option<DateTim
             .parse::<Weekday>()
             .map_err(|_| format_err!("failed to parse day {}", &capt[2]))?;
 
-
-        let difference_in_days = weekday.num_days_from_monday() as i64
-            - now.weekday().num_days_from_monday() as i64;
+        let difference_in_days =
+            weekday.num_days_from_monday() as i64 - now.weekday().num_days_from_monday() as i64;
 
         let mut date = now + Duration::days(difference_in_days);
 

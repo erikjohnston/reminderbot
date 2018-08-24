@@ -10,20 +10,26 @@ use tokio_core::reactor::Handle;
 
 use date::parse_human_datetime;
 use matrix::types::Event;
-use matrix::Syncer;
+use matrix::{MessageSender, Syncer};
 
 pub struct EventHandler {
     logger: Logger,
     reminders: Reminders,
     rng: ThreadRng,
+    message_sender: Box<MessageSender>,
 }
 
 impl EventHandler {
-    pub fn new(logger: Logger, reminders: Reminders) -> EventHandler {
+    pub fn new(
+        logger: Logger,
+        reminders: Reminders,
+        message_sender: Box<MessageSender>,
+    ) -> EventHandler {
         EventHandler {
             logger,
             reminders,
             rng: thread_rng(),
+            message_sender,
         }
     }
 
@@ -84,16 +90,18 @@ impl EventHandler {
             let due = match parse_human_datetime(at, now) {
                 Ok(date) => date,
                 Err(_) => {
-                    // TODO: Report back error
                     info!(logger, "Failed to parse date {}", at);
-                    return Box::new(future::ok(()));
+                    return self
+                        .message_sender
+                        .send_text_message(room_id, &format!("Failed to parse date {}", at));
                 }
             };
 
             if due < now {
-                // TODO: Report back error
                 info!(logger, "Due date in past: {}", due);
-                return Box::new(future::ok(()));
+                return self
+                    .message_sender
+                    .send_text_message(room_id, &format!("Due date in past: {}", due));
             }
 
             info!(logger, "Queuing message to be sent at '{}'", due);
@@ -106,8 +114,15 @@ impl EventHandler {
             });
 
             if let Err(err) = res {
-                // TODO: Report back error
-                error!(logger, "Failed to handle reminder"; "error" => format!("{}", err));
+                error!(logger, "Failed to handle reminder"; "error" => %err);
+                return self
+                    .message_sender
+                    .send_text_message(room_id, &format!("Failed to persist reminder: {}", err));
+            } else {
+                return self.message_sender.send_text_message(
+                    room_id,
+                    &format!("Queuing message to be sent at '{}'", due),
+                );
             }
 
         // TODO: persist.
