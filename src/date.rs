@@ -105,12 +105,15 @@ fn parse_on_day_clause(input: &str, now: DateTime<Utc>) -> Result<Option<DateTim
         .expect("invalid regex");
 
     if let Some(capt) = on_regex.captures(input) {
-        let weekday: Weekday = capt[2]
+        let weekday: Weekday = capt[2][..3]
             .parse::<Weekday>()
             .map_err(|_| format_err!("failed to parse day {}", &capt[2]))?;
 
-        let mut date = now - Duration::days(i64::from(weekday.num_days_from_monday()));
-        date = date + Duration::days(i64::from(weekday.num_days_from_monday()));
+
+        let difference_in_days = weekday.num_days_from_monday() as i64
+            - now.weekday().num_days_from_monday() as i64;
+
+        let mut date = now + Duration::days(difference_in_days);
 
         if date < now {
             // If we're in the past then we should shoot forward a week
@@ -278,6 +281,11 @@ fn date_parse_test() {
     assert_eq!(
         parse_human_datetime("wed", dt).unwrap(),
         Utc.ymd(2014, 7, 9).and_hms(9, 30, 00)
+    );
+
+    assert_eq!(
+        parse_human_datetime("thurs", dt).unwrap(),
+        Utc.ymd(2014, 7, 10).and_hms(9, 30, 00)
     );
 
     assert_eq!(
