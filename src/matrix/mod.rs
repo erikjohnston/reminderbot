@@ -209,7 +209,7 @@ where
     fn send_text_message(&self, room_id: &str, msg: &str) -> Box<Future<Item = (), Error = ()>> {
         let content = serde_json::to_vec(&json!({
             "body": msg,
-            "msgtype": "m.text",
+            "msgtype": "m.notice",
         })).expect("valid json");
 
         let url = format!(

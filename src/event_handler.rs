@@ -93,18 +93,23 @@ impl EventHandler {
                     info!(logger, "Failed to parse date {}", at);
                     return self
                         .message_sender
-                        .send_text_message(room_id, &format!("Failed to parse date {}", at));
+                        .send_text_message(room_id, &format!("Error: Failed to parse date {}", at));
                 }
             };
 
             if due < now {
                 info!(logger, "Due date in past: {}", due);
-                return self
-                    .message_sender
-                    .send_text_message(room_id, &format!("Due date in past: {}", due));
+                return self.message_sender.send_text_message(
+                    room_id,
+                    &format!("Error: Due date in past: {}", due.to_rfc2822()),
+                );
             }
 
-            info!(logger, "Queuing message to be sent at '{}'", due);
+            info!(
+                logger,
+                "Queuing message to be sent at '{}'",
+                due.to_rfc2822(),
+            );
 
             let res = self.reminders.add_reminder(&Reminder {
                 id,
@@ -115,13 +120,14 @@ impl EventHandler {
 
             if let Err(err) = res {
                 error!(logger, "Failed to handle reminder"; "error" => %err);
-                return self
-                    .message_sender
-                    .send_text_message(room_id, &format!("Failed to persist reminder: {}", err));
+                return self.message_sender.send_text_message(
+                    room_id,
+                    &format!("Error: Failed to persist reminder: {}", err),
+                );
             } else {
                 return self.message_sender.send_text_message(
                     room_id,
-                    &format!("Queuing message to be sent at '{}'", due),
+                    &format!("Queuing message to be sent at '{}'", due.to_rfc2822()),
                 );
             }
 
